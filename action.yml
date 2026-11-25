@@ -1,0 +1,42 @@
+name: Türkçe PR İnceleme Botu
+description: Claude ile pull request diffini inceler ve COMMENT incelemesi gönderir.
+inputs:
+  github-token:
+    description: Pull request yazma yetkili GitHub tokenı
+    required: true
+  anthropic-api-key:
+    description: Anthropic API anahtarı
+    required: false
+    default: ''
+  openrouter-api-key:
+    description: OpenRouter API anahtarı
+    required: false
+    default: ''
+  model:
+    description: Sağlayıcı model kimliği
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: PR diffini incele
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
+        PR_INCELEME_MODEL: ${{ inputs.model }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        PYTHONDONTWRITEBYTECODE: '1'
+      run: |
+        if [[ -z "$PR_NUMBER" ]]; then
+          echo "::error::Bu action bir pull_request olayı gerektirir."
+          exit 1
+        fi
+        if [[ "$PR_IS_FORK" == "true" && -z "$ANTHROPIC_API_KEY" && -z "$OPENROUTER_API_KEY" ]]; then
+          echo "::notice::Fork PR için model anahtarı erişilebilir değil, inceleme atlandı."
+          exit 0
+        fi
+        python3 -m pr_inceleme --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --post
