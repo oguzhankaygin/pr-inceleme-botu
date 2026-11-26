@@ -5,10 +5,44 @@ Bot, pull request diffini Claude ile inceler. Türkçe özet, gerekçeli bulgula
 ## GitHub Actions kurulumu
 
 1. Hedef deponun **Settings → Secrets and variables → Actions** bölümünde `ANTHROPIC_API_KEY` adlı repository secret oluşturun. OpenRouter kullanıyorsanız `OPENROUTER_API_KEY` ekleyin.
-2. `pr_inceleme/`, `action.yml` ve örnek `.github/workflows/pr-inceleme.yml` dosyasını aynı yollarla hedef deponun taban dalına kopyalayın.
-3. Bir pull request açın. Workflow açılışta, yeni commit gönderildiğinde ve PR yeniden açıldığında çalışır.
+2. Aşağıdaki workflow'u hedef deponun `.github/workflows/pr-inceleme.yml` yoluna ekleyin. Action kendi dizininden çalışır ve PR bilgisiyle diffi GitHub API üzerinden alır. Hedef depo için checkout gerekmez.
+3. Bir pull request açın. Bot uygun PR'lara Türkçe bir inceleme gönderir.
 
-İki anahtar da varsa Anthropic seçilir. Varsayılan modeller [Claude Sonnet 5.5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview) (`claude-sonnet-5-5`) ve [OpenRouter Claude Haiku 5.5](https://openrouter.ai/anthropic/claude-haiku-5.5) (`anthropic/claude-haiku-5.5`). Modeli değiştirmek için Actions repository variable olarak `PR_INCELEME_MODEL` ayarlayın.
+```yaml
+name: Türkçe PR incelemesi
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-inceleme-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  inceleme:
+    runs-on: ubuntu-latest
+    steps:
+      - name: İncele
+        uses: oguzhankaygin/pr-inceleme-botu@v1
+        with:
+          github-token: ${{ github.token }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          model: ${{ vars.PR_INCELEME_MODEL }}
+          tetikleme: otomatik
+```
+
+- `tetikleme: otomatik` varsayılandır. PR açıldığında, yeni commit gönderildiğinde, PR yeniden açıldığında veya incelemeye hazır olduğunda bot devreye girer. Yalnızca bu modu kullanacaksanız `labeled` olayını listeden çıkarabilirsiniz.
+- `tetikleme: etiket` seçeneğinde aynı olaylar yalnızca PR'da `claude-inceleme` etiketi varsa inceleme başlatır. Etiketi eklemek de incelemeyi tetikler. Workflow'da `labeled` olayını tutun.
+- Taslak PR'lar, yalnızca test, doküman veya kilit dosyası değişen diff'ler ve eklenen ile silinen satırların toplamı üçten küçük olan diff'ler loga yazılıp atlanır. Aynı commit için mevcut bot yorumu varsa yeni inceleme yapılmaz.
+- İki anahtar da varsa Anthropic seçilir. Varsayılan model Anthropic'te `claude-haiku-5-5`, OpenRouter'da `anthropic/claude-haiku-5.5`. Modeli değiştirmek için `PR_INCELEME_MODEL` adlı Actions repository variable tanımlayın. [Anthropic model bilgileri](https://platform.claude.com/docs/en/models/haiku-5-5/overview), [OpenRouter model bilgileri](https://openrouter.ai/anthropic/claude-haiku-5.5).
+
+Kodu kendi deponuzda tutmayı tercih ederseniz `pr_inceleme/` ve `action.yml` dosyalarını taban dalına kopyalayın. Workflow'da güvenilir taban commit'ini `actions/checkout@v4` ile alın (`ref: ${{ github.event.pull_request.base.sha }}`, `persist-credentials: false`) ve inceleme adımında `uses: ./` kullanın.
 
 ## Yerel kullanım
 
@@ -21,7 +55,7 @@ python3 -m pr_inceleme --repo owner/name --pr 42
 python3 -m pr_inceleme --repo owner/name --pr 42 --post
 ```
 
-Rapor stdout'a, durum mesajları stderr'e yazılır. `--post` verilmediğinde GitHub'a yazılmaz. Bu kullanım da model isteği yapar. `--budget 30000` ile varsayılan 60.000 karakterlik diff bütçesini değiştirebilirsiniz.
+Rapor stdout'a, durum mesajları stderr'e yazılır. `--post` verilmediğinde GitHub'a yazılmaz. İncelemeye uygun diff için bu kullanım da model isteği yapar. `--budget 30000` ile varsayılan 40.000 karakterlik diff bütçesini değiştirebilirsiniz.
 
 ## Örnek çıktı
 
@@ -55,10 +89,21 @@ Rapor stdout'a, durum mesajları stderr'e yazılır. `--post` verilmediğinde Gi
 >
 > Bu otomatik bir incelemedir; onay ekip liderindedir.
 
-## Maliyet ve güvenlik
+## Öğrenciler için maliyet
 
-- Sağlayıcılar giriş ve çıkış tokenlarına göre ücret alabilir. Ücret PR boyutuna, modele ve inceleme sayısına bağlıdır. GitHub'a yazmayan denemeler de model çağrısı yaptığında ücret doğurabilir.
-- Örnek workflow `contents: read` ve `pull-requests: write` ister. Yerel token için ilgili depoda işlemle uyumlu Pull requests yetkisini kullanın. Workflow, action ve Python kodunu PR başından çalıştırmaz, taban commit'inden alır.
+Anthropic Claude Haiku 5.5 için 100.000 girdi tokenına kadar fiyat, milyon token başına girdi için 0,10 USD ve çıktı için 0,50 USD'dir. PR başına tek inceleme, 10.000 girdi tokenı (sistem talimatı, PR bilgileri ve seçilen diff dahil) ve 1.500 çıktı tokenı varsayarsak önbellek hariç tahmin **0,00175 USD** olur. [Anthropic fiyatlandırması](https://platform.claude.com/docs/en/about-claude/pricing).
+
+```text
+(10.000 × 0,10 + 1.500 × 0,50) / 1.000.000 = 0,00175 USD
+```
+
+Bir PR'ın toplam maliyeti, incelenen commit'lerin maliyetleri toplamıdır. Bot, fiyat tablosunda bulunan modeller için API'nin bildirdiği token kullanımından tahmini maliyeti hesaplar ve raporun altına ekler. Anthropic sistem talimatında geçici önbellek kullanır. Okuma ve yazma tokenları ayrı tarifelerden hesaplanır. [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+
+Ekip başına tek anahtar kullanın ve aylık harcama limiti koyun.
+
+## Güvenlik
+
+- Örnek workflow `contents: read` ve `pull-requests: write` ister. Yerel token için ilgili depoda işlemle uyumlu Pull requests yetkisini kullanın. Workflow, action kodunu `v1` referansından çalıştırır.
 - Örnek workflow `pull_request` olayıyla çalışır. Model secret'ları bulunmayan fork PR'ları açıklayıcı bir bildirimle atlanır. GitHub ayarları fork workflow'unun başlaması için onay isteyebilir ve fork tokenını salt okunur tutabilir.
 - PR başlığı, açıklaması ve diff model girdisidir. Ayrı güvenilmeyen veri etiketleri içindedir ve sistem talimatı bu içerikteki komutları yok saymasını ister. Prompt injection riski devam eder. Bot PR kodunu çalıştırmaz. Satır konumlarını ve diyagramdaki dosya adlarını diff ile doğrular.
 - Seçilen diff ve kırpılmış PR metni model sağlayıcısına gider. Bu nedenle PR'a gizli bilgi koymayın. API anahtarlarını yalnızca secret veya ortam değişkeni olarak verin.

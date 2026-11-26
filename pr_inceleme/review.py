@@ -140,7 +140,10 @@ def render(report, skipped, include_inline=True, marker=False):
         lines.extend(f"- {_md(path)} ({reason})" for path, reason in skipped)
     if marker:
         lines.extend(["", MARKER])
-    return "\n".join([*lines, "", NOTE, ""])
+    lines.extend(["", NOTE])
+    if (cost := report.get("cost_usd")) is not None:
+        lines.extend(["", f"_Tahmini model maliyeti · {cost:.6f} USD_"])
+    return "\n".join([*lines, ""])
 
 
 def inline_comments(report):

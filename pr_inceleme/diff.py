@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-DEFAULT_BUDGET = 60_000
+DEFAULT_BUDGET = 40_000
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 QUOTED = re.compile(r'^"(?:[^"\\]|\\.)*"')
 ESCAPE = re.compile(rb"\\([0-7]{3}|.)")
@@ -118,14 +118,36 @@ def skip_reason(file):
         ".bmp", ".tiff", ".tif", ".pdf", ".zip", ".woff", ".woff2",
     }:
         return "ikili dosya veya görsel"
-    if path.name in {"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
-                     "go.sum", "composer.lock", "bun.lockb"} or path.suffix == ".lock":
+    if is_lock(path):
         return "kilit dosyası"
     if {"dist", "build", "generated", "node_modules"} & set(path.parts[:-1]) or path.name.endswith(
         (".min.js", ".min.css", ".js.map", ".css.map", ".generated.py")
     ):
         return "üretilmiş dosya"
     return None
+
+
+def is_test_doc_or_lock(path):
+    file = PurePosixPath(path.lower())
+    directories = set(file.parts[:-1])
+    name = file.name
+    return (
+        is_lock(file)
+        or bool(directories & {"test", "tests", "__tests__", "spec", "specs", "doc", "docs"})
+        or file.suffix in {".md", ".rst", ".adoc", ".mdx", ".markdown", ".txt"}
+        or name in {"readme", "license", "changelog", "contributing", "authors", "notice"}
+        or name in {"conftest.py", "pytest.ini"}
+        or name.startswith(("test_", "test."))
+        or file.stem.endswith(("_test", "_tests", "_spec", ".test", ".spec")
+        or PurePosixPath(path).stem.endswith(("Test", "Tests", "Spec")))
+    )
+
+
+def is_lock(path):
+    return path.name in {
+        "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "go.sum",
+        "bun.lockb", "pipfile.lock", "pubspec.lock", "gradle.lockfile", "packages.lock.json",
+    } or path.suffix == ".lock"
 
 
 def select_files(files, budget=DEFAULT_BUDGET):

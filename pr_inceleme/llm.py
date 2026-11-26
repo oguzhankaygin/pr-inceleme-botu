@@ -18,7 +18,58 @@ Yalnızca şu yapıda JSON döndür:
 Satır numarası yeni dosyadaki eklenen satıra ait olmalı. Genel bulgular için
 satir null kullan. En fazla 15 somut bulgu yaz. Dosyalar arası ilişki varsa
 isteğe bağlı "iliski":[{"kaynak":"dosya","hedef":"dosya"}] alanında belirt.
+
+İncelemeyi değişen davranışa dayandır. Girdinin nereden geldiğini, hangi
+koşulda davranışın değiştiğini ve kullanıcının ne yaşayacağını açıkla.
+Diffteki bağlam bir iddiayı desteklemiyorsa onu bulgu olarak yazma.
+Eksik bilgi değişikliğin doğruluğunu değerlendirmek için gerekliyse
+sorular alanında hangi bilginin gerektiğini belirt. Var olan davranışı
+değişiklikten kaynaklanan bir hata gibi sunma. Silinen kod gerekli bir
+kontrolü kaldırıyorsa, kontrol olmadan hangi yolun başarısız olduğunu açıkla.
+
+Kritik önem düzeyini veri kaybı, yetkisiz erişim veya temel işlevin
+çalışmaması gibi doğrudan gösterilebilen sonuçlar için kullan. Önemli
+bulgulara belirli bir kullanımda ortaya çıkan hataları, uyumluluk
+sorunlarını ve yanlış sonuçları yaz. Öneri düzeyini somut iyileştirmeler
+için kullan. Sadece biçim veya kişisel tercih hakkındaki yorumları çıkar.
+Aynı nedenden kaynaklanan bulguları birleştir. Her bulguda kullanıcının
+uygulayabileceği en küçük düzeltmeyi tarif et ve doğrulanmamış dosya veya
+satır numarası uydurma.
+
+Test önerisi bir girdi veya başlangıç durumu, gerçekleştirilecek işlem
+ve beklenen sonuç içersin. Örneğin değişiklik boş listeyi kabul ediyorsa,
+boş listeyle çağrı yapıldığında boş sonuç dönmesini ve kayıt yazılmamasını
+kontrol etmeyi öner. Özette değişikliğin amacını ve gözlemlenebilir etkisini
+kısa biçimde anlat. Akışta dosya adlarını tekrarlamak yerine işlemleri
+gerçekleşme sırasıyla yaz. Bulgu ya da soru yoksa ilgili listeyi boş bırak.
+Yanıtı kod bloğuna alma ve JSON dışına açıklama ekleme.
 """
+
+
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
+# Milyon token başına USD: girdi, çıktı, 5 dk. önbellek yazma, önbellek okuma.
+MODEL_PRICES = {
+    DEFAULT_ANTHROPIC_MODEL: (0.10, 0.50, 0.125, 0.01),
+    "claude-sonnet-5-5": (2.00, 10.00, 2.50, 0.20),
+    "anthropic/claude-haiku-5.5": (0.10, 0.50, 0.125, 0.01),
+}
+
+
+def _estimate_cost(model, usage, anthropic):
+    if model not in MODEL_PRICES or not isinstance(usage, dict):
+        return None
+    if anthropic:
+        counts = (usage.get("input_tokens"), usage.get("output_tokens"),
+                  usage.get("cache_creation_input_tokens", 0),
+                  usage.get("cache_read_input_tokens", 0))
+    else:
+        counts = (usage.get("prompt_tokens"), usage.get("completion_tokens"), 0, 0)
+    if any(type(count) is not int or count < 0 for count in counts):
+        return None
+    prices = MODEL_PRICES[model]
+    if model == DEFAULT_ANTHROPIC_MODEL and counts[0] + counts[2] + counts[3] > 100_000:
+        prices = (0.50, 2.50, 0.625, 0.05)
+    return sum(count * price for count, price in zip(counts, prices)) / 1_000_000
 
 
 class LLMError(Exception):
@@ -48,7 +99,9 @@ def review_diff(patch, title="", description=""):
     if anthropic:
         url = "https://api.anthropic.com/v1/messages"
         headers = {"x-api-key": anthropic, "anthropic-version": "2023-06-01"}
-        payload = {"model": override or "claude-sonnet-5-5", "system": SYSTEM,
+        payload = {"model": override or DEFAULT_ANTHROPIC_MODEL,
+                   "system": [{"type": "text", "text": SYSTEM,
+                               "cache_control": {"type": "ephemeral"}}],
                    "messages": messages, "max_tokens": 8000}
     elif router:
         url = "https://openrouter.ai/api/v1/chat/completions"
@@ -89,7 +142,7 @@ def review_diff(patch, title="", description=""):
                 raise LLMError("Model yanıtı token sınırında kesildi; diff'i küçültün (--budget).")
             output = choice["message"]["content"]
         if isinstance(output, str) and output.strip():
-            return output
+            return output, _estimate_cost(payload["model"], data.get("usage"), bool(anthropic))
     except (KeyError, IndexError, TypeError):
         pass
     raise LLMError("Model API yanıtında inceleme metni bulunamadı.")

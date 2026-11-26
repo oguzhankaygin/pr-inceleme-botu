@@ -16,6 +16,10 @@ inputs:
     description: Sağlayıcı model kimliği
     required: false
     default: ''
+  tetikleme:
+    description: otomatik veya etiket
+    required: false
+    default: otomatik
 runs:
   using: composite
   steps:
@@ -26,7 +30,10 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
-        PR_INCELEME_MODEL: ${{ inputs.model }}
+        PR_INCELEME_MODEL: ${{ inputs.model || env.PR_INCELEME_MODEL }}
+        PR_TETIKLEME: ${{ inputs.tetikleme }}
+        PR_EVENT_ACTION: ${{ github.event.action }}
+        PR_EVENT_LABEL: ${{ github.event.label.name }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         PR_IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         PYTHONDONTWRITEBYTECODE: '1'
@@ -39,4 +46,9 @@ runs:
           echo "::notice::Fork PR için model anahtarı erişilebilir değil, inceleme atlandı."
           exit 0
         fi
-        python3 -m pr_inceleme --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --post
+        if [[ "$PR_EVENT_ACTION" == "labeled" ]] &&
+           [[ "$PR_TETIKLEME" != "etiket" || "$PR_EVENT_LABEL" != "claude-inceleme" ]]; then
+          echo "::notice::Etiket olayı incelemeyi tetiklemedi."
+          exit 0
+        fi
+        python3 -m pr_inceleme --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --post --tetikleme "$PR_TETIKLEME"
